@@ -92,9 +92,9 @@ const char* twistModeHtml = R"rawliteral(
   <div class="container">
     <h1>Twist Mode</h1>
     <form id="twistForm">
-      <label>On Duration (secs)</label>
+      <label>On Duration (minutes)</label>
       <input type="number" id="onDuration" name="onDuration" min="1" max="600" required />
-      <label>Off Duration (secs)</label>
+      <label>Off Duration (minutes)</label>
       <input type="number" id="offDuration" name="offDuration" min="1" max="600" required />
       <label>On Time (HH:MM)</label>
       <input type="time" id="onTime" name="onTime" required />
@@ -110,8 +110,10 @@ const char* twistModeHtml = R"rawliteral(
         <label><input type="checkbox" name="days" value="sat">Sat</label>
         <label><input type="checkbox" name="days" value="sun">Sun</label>
       </div>
-      <button type="submit">Save</button>
+      <button type="submit">Save &amp; Start Twist</button>
     </form>
+    <button type="button" onclick="stopTwist()"
+            style="background:linear-gradient(135deg,#f44336,#e57373)">Stop Twist</button>
     <p id="message"></p>
     <a href="/"><button type="button" class="back-btn">Back</button></a>
   </div>
@@ -120,7 +122,7 @@ const char* twistModeHtml = R"rawliteral(
 
 window.onload = async function() {
   try {
-    const res = await fetch('/twist/get');
+    const res = await fetch('/get_twist');   /* reads the device */
     const data = await res.json();
     if(data.onDuration)
       document.getElementById("onDuration").value = data.onDuration;
@@ -136,10 +138,22 @@ window.onload = async function() {
         if(arr.includes(cb.value)) cb.checked = true;
       });
     }
+    document.getElementById('message').textContent =
+      data.fromDevice != 1 ? "Device not responding - showing last known values"
+                           : (data.active == 1 ? "Twist is running" : "Twist is off");
   } catch(e){
-    console.log("Failed to load twist data");
+    document.getElementById('message').textContent = "Failed to load twist data";
   }
 };
+
+async function stopTwist() {
+  try {
+    const r = await fetch('/twist_stop');
+    document.getElementById('message').textContent = await r.text();
+  } catch {
+    document.getElementById('message').textContent = "Failed to send to ESP.";
+  }
+}
 
 document.getElementById('twistForm').addEventListener('submit', async function(e) {
   e.preventDefault();
@@ -157,8 +171,8 @@ document.getElementById('twistForm').addEventListener('submit', async function(e
   try {
     await fetch('/twist_submit?' + params.toString());
     let msg = "Twist Settings Saved\n";
-    msg += `On Duration: ${form.get('onDuration')} sec\n`;
-    msg += `Off Duration: ${form.get('offDuration')} sec\n`;
+    msg += `On Duration: ${form.get('onDuration')} min\n`;
+    msg += `Off Duration: ${form.get('offDuration')} min\n`;
     msg += `Time: ${form.get('onTime')} - ${form.get('offTime')}\n`;
     msg += `Days: ${selectedDays.join(', ') || '-'}`;
     document.getElementById('message').textContent = msg;

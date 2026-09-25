@@ -6,11 +6,16 @@
  *  2. buildSettingsJson() — keys now match HTML element IDs exactly
  *  3. buildTimerJson() — keyed object {"slot1":{...},...} with "on"/"off" keys
  *  4. GET endpoints added for all pages
- *  5. [NEW] EEPROM persistence — all user-set values saved to EEPROM and
- *     restored on power-up so pages always show last values set by user
- *  6. [NEW] Mode toggle endpoints now return {"mode":"..."} JSON so the
- *     dashboard JS can update buttons/mode text WITHOUT touching water level,
- *     fixing the spurious 100% level jump on mode switch
+ *  5. EEPROM persistence of the last known values (fallback only)
+ *  6. Mode toggle endpoints return {"mode":"..."} JSON
+ *  7. [NEW] Pages show the DEVICE's current values: every /get_* endpoint
+ *     first asks the STM32 (@SETTINGS:GET#, @TINFO#, @TWIST:GET#,
+ *     @COUNTDOWN:GET#) and fills the cache from its reply. Before, the
+ *     cache held ESP defaults, and "Apply" pushed them onto the device.
+ *  8. [NEW] Timer: disabled slots are sent too (unchecking now sticks);
+ *     twist/countdown/timer no longer send extra "<mode>:OFF/ON" pairs
+ *     after their own command; countdown sent in minutes; factory reset
+ *     and timer stop endpoints added.
  */
 
 #include <Arduino.h>
@@ -52,6 +57,8 @@ extern const char *htmlContent;
 #define MOTOR_PIN 2
 #endif
 
+#define DEVICE_REPLY_TIMEOUT_MS 800UL
+
 
 /* ======================================================
    GLOBAL STATE
@@ -63,29 +70,31 @@ int g_liveLevel = 0;
 int g_waterLevel = 0;
 
 
-/* ================= SETTINGS CACHE ================= */
+/* ================= SETTINGS CACHE =================
+   Defaults = STM32 factory defaults; replaced by the device's values
+   as soon as it answers. */
 
 struct SettingsCache {
-  int dryRunGap = 5;
+  int dryRunGap = 2;
   int testingGap = 30;
-  int maxRun = 120;
-  int retryCount = 3;
+  int maxRun = 150;
+  int retryCount = 5;
   int lowVolt = 180;
-  int highVolt = 260;
-  int overLoad = 0;
+  int highVolt = 280;
+  int overLoad = 25;
   int underLoad = 0;
-  int powerRestore = 0;
-  int dryRunEn = 1;
+  int powerRestore = 1;     /* 0 = ON, 1 = OFF */
+  int dryRunEn = 0;
   int testingEn = 1;
   int maxRunEn = 1;
   int retryEn = 1;
   int lowVoltEn = 1;
   int highVoltEn = 1;
-  int overLoadEn = 0;
+  int overLoadEn = 1;
   int underLoadEn = 0;
-  int buzzerPump = 1;
-  int buzzerFull = 1;
-  int buzzerEmpty = 1;
+  int buzzerPump = 0;
+  int buzzerFull = 0;
+  int buzzerEmpty = 0;
 } g_settings;
 
 
@@ -105,8 +114,8 @@ TimerSlot g_timer[5];
 
 struct CountdownCache {
   bool active = false;
-  int duration = 600;
-  int remaining = 0;
+  int duration = 600;      /* seconds (page shows minutes) */
+  int remaining = 0;       /* seconds */
 } g_countdown;
 
 
@@ -114,23 +123,20 @@ struct CountdownCache {
 
 struct TwistCache {
   bool active = false;
-  int onDuration = 5;
-  int offDuration = 5;
+  int onDuration = 5;      /* minutes */
+  int offDuration = 5;     /* minutes */
   String onTime = "06:00";
   String offTime = "18:00";
-  String days = "Mon,Tue,Wed,Thu,Fri,Sat,Sun";
+  String days = "mon,tue,wed,thu,fri,sat,sun";
 } g_twist;
 
 
 /* ======================================================
    EEPROM PERSISTENCE
-   All user-configurable values are stored in EEPROM so
-   they survive power cycles. Strings are stored as fixed
-   char arrays. A magic number detects a blank/corrupt
-   EEPROM and falls back to firmware defaults.
+   Last known values, used only until the STM32 answers.
 ====================================================== */
 
-#define EEPROM_MAGIC 0xBEEFC0DE
+#define EEPROM_MAGIC 0xBEEFC0DF   /* changed: layout of defaults changed */
 #define EEPROM_SIZE 512
 
 struct EEPROMData {
@@ -218,17 +224,13 @@ static void saveToEEPROM() {
 
   EEPROM.put(0, d);
   EEPROM.commit();
-  Serial.println("💾 EEPROM saved");
 }
 
 static void loadFromEEPROM() {
   EEPROMData d;
   EEPROM.get(0, d);
 
-  if (d.magic != EEPROM_MAGIC) {
-    Serial.println("⚠️  EEPROM: no valid data, using firmware defaults");
-    return;
-  }
+  if (d.magic != EEPROM_MAGIC) return;   /* keep firmware defaults */
 
   /* Settings */
   g_settings.dryRunGap = d.dryRunGap;
@@ -273,8 +275,6 @@ static void loadFromEEPROM() {
   g_twist.offTime = String(d.twistOffTime);
   g_twist.days = String(d.twistDays);
   g_twist.active = false;
-
-  Serial.println("✅ EEPROM loaded — user settings restored");
 }
 
 
@@ -292,16 +292,42 @@ void requestStatus() {
   sendPacket("@STATUS#");
 }
 
+/* Toggle a simple mode (AUTO / MANUAL / SEMIAUTO) on the STM32. Starting
+ * a mode on the STM32 already stops the others, so only one packet is
+ * needed; "<old>:OFF" first is not required. */
 void setMode(String newMode) {
   if (g_liveMode == newMode) {
     sendPacket("@" + newMode + ":OFF#");
     g_liveMode = "STANDBY";
   } else {
-    if (g_liveMode != "STANDBY" && g_liveMode != "OFFMODE")
-      sendPacket("@" + g_liveMode + ":OFF#");
     sendPacket("@" + newMode + ":ON#");
     g_liveMode = newMode;
   }
+}
+
+static String two(int v) {
+  return (v < 10 ? "0" : "") + String(v);
+}
+
+/* Split "a:b:c" into up to maxParts fields */
+static int splitColon(const String &s, String *out, int maxParts) {
+  int n = 0, start = 0;
+  while (n < maxParts) {
+    int c = s.indexOf(':', start);
+    if (c == -1) { out[n++] = s.substring(start); break; }
+    out[n++] = s.substring(start, c);
+    start = c + 1;
+  }
+  return n;
+}
+
+/* Strip "@PREFIX:" and trailing "#" */
+static String packetBody(const String &pkt, const char *prefix) {
+  String b = pkt.substring(strlen(prefix));
+  int h = b.lastIndexOf('#');
+  if (h != -1) b.remove(h);
+  b.trim();
+  return b;
 }
 
 
@@ -331,11 +357,13 @@ void parseStatus(String pkt) {
   g_waterLevel = level;
 
   g_liveMode = pkt.substring(colon2 + 1);
+  g_countdown.active = (g_liveMode == "COUNTDOWN");
+  g_twist.active     = (g_liveMode == "TWIST");
 }
 
 
 /* ======================================================
-   SETTINGS PARSER
+   SETTINGS PARSER  (from the web page, "key=value;...")
 ====================================================== */
 
 void parseSettings(String data) {
@@ -382,6 +410,131 @@ void parseSettings(String data) {
 
 
 /* ======================================================
+   DEVICE REPLY PARSERS
+====================================================== */
+
+/* A value of 0 from the device means "disabled": keep the last
+ * number so the user can simply switch it back on. */
+static void takeLimit(int v, int &value, int &enable) {
+  enable = (v > 0) ? 1 : 0;
+  if (v > 0) value = v;
+}
+
+/* @SETTINGS_DATA:D=2;T=30;RC=5;M=150;LV=180;HV=280;OL=25;UL=0;PR=1;DE=0;BZ=0;BF=0;BE=0;CD=10# */
+static void parseDeviceSettings(const String &body) {
+  int start = 0;
+  while (start < (int)body.length()) {
+    int semi = body.indexOf(';', start);
+    String token = (semi == -1) ? body.substring(start) : body.substring(start, semi);
+    start = (semi == -1) ? body.length() : semi + 1;
+
+    int eq = token.indexOf('=');
+    if (eq == -1) continue;
+    String key = token.substring(0, eq);
+    int v = token.substring(eq + 1).toInt();
+
+    if      (key == "D")  { if (v > 0) g_settings.dryRunGap = v; }
+    else if (key == "DE") g_settings.dryRunEn = v ? 1 : 0;
+    else if (key == "T")  { g_settings.testingGap = v; g_settings.testingEn = 1; }
+    else if (key == "RC") takeLimit(v, g_settings.retryCount, g_settings.retryEn);
+    else if (key == "M")  takeLimit(v, g_settings.maxRun,     g_settings.maxRunEn);
+    else if (key == "LV") takeLimit(v, g_settings.lowVolt,    g_settings.lowVoltEn);
+    else if (key == "HV") takeLimit(v, g_settings.highVolt,   g_settings.highVoltEn);
+    else if (key == "OL") takeLimit(v, g_settings.overLoad,   g_settings.overLoadEn);
+    else if (key == "UL") takeLimit(v, g_settings.underLoad,  g_settings.underLoadEn);
+    else if (key == "PR") g_settings.powerRestore = (v == 1) ? 1 : 0;
+    else if (key == "BZ") g_settings.buzzerPump  = v ? 1 : 0;
+    else if (key == "BF") g_settings.buzzerFull  = v ? 1 : 0;
+    else if (key == "BE") g_settings.buzzerEmpty = v ? 1 : 0;
+    else if (key == "CD") { if (v > 0) g_countdown.duration = v * 60; }
+  }
+}
+
+/* @TSLOT:1:06:00:08:00:0x7F:1#  (day mask bit0 = Mon .. bit6 = Sun) */
+static void parseDeviceTimerSlot(const String &body) {
+  static const char *DAY_NAMES[7] = { "mon","tue","wed","thu","fri","sat","sun" };
+  String f[7];
+  if (splitColon(body, f, 7) < 7) return;
+
+  int n = f[0].toInt();
+  if (n < 1 || n > 5) return;
+  TimerSlot &t = g_timer[n - 1];
+
+  t.onTime  = two(f[1].toInt()) + ":" + two(f[2].toInt());
+  t.offTime = two(f[3].toInt()) + ":" + two(f[4].toInt());
+
+  int mask = (int)strtol(f[5].c_str(), nullptr, 16);
+  String days = "";
+  for (int d = 0; d < 7; d++)
+    if (mask & (1 << d)) { if (days.length()) days += ","; days += DAY_NAMES[d]; }
+  t.days = days;
+  t.enabled = (f[6].toInt() != 0);
+}
+
+/* @TWIST_DATA:<onMin>:<offMin>:HH:MM:HH:MM:<active># */
+static void parseDeviceTwist(const String &body) {
+  String f[7];
+  if (splitColon(body, f, 7) < 7) return;
+  if (f[0].toInt() > 0) g_twist.onDuration  = f[0].toInt();
+  if (f[1].toInt() > 0) g_twist.offDuration = f[1].toInt();
+  g_twist.onTime  = two(f[2].toInt()) + ":" + two(f[3].toInt());
+  g_twist.offTime = two(f[4].toInt()) + ":" + two(f[5].toInt());
+  g_twist.active  = (f[6].toInt() != 0);
+}
+
+/* @COUNTDOWN_DATA:<defaultMin>:<remainingSec>:<active># */
+static void parseDeviceCountdown(const String &body) {
+  String f[3];
+  if (splitColon(body, f, 3) < 3) return;
+  if (f[0].toInt() > 0) g_countdown.duration = f[0].toInt() * 60;
+  g_countdown.remaining = f[1].toInt();
+  g_countdown.active    = (f[2].toInt() != 0);
+}
+
+/* Route one packet from the STM32. Returns true if it was consumed. */
+static bool handleDevicePacket(const String &pkt) {
+  if (pkt.startsWith("@STATUS:"))         { parseStatus(pkt); return true; }
+  if (pkt.startsWith("@SETTINGS_DATA:"))  { parseDeviceSettings(packetBody(pkt, "@SETTINGS_DATA:")); return true; }
+  if (pkt.startsWith("@TSLOT:"))          { parseDeviceTimerSlot(packetBody(pkt, "@TSLOT:")); return true; }
+  if (pkt.startsWith("@TWIST_DATA:"))     { parseDeviceTwist(packetBody(pkt, "@TWIST_DATA:")); return true; }
+  if (pkt.startsWith("@COUNTDOWN_DATA:")) { parseDeviceCountdown(packetBody(pkt, "@COUNTDOWN_DATA:")); return true; }
+  if (pkt == "@COUNTDOWN_OFF#" || pkt.startsWith("@COUNTDOWN:DONE")) {
+    g_countdown.active = false;
+    g_countdown.remaining = 0;
+    return true;
+  }
+  return false;
+}
+
+/* Send a request (none if cmd is empty - just wait for a reply to a
+ * command already sent) until `expectCount` replies starting with
+ * `expectPrefix` have arrived. Other packets are routed as usual. */
+static bool requestFromDevice(const char *cmd, const char *expectPrefix, int expectCount) {
+  if (cmd && *cmd) sendPacket(cmd);
+  unsigned long start = millis();
+  int got = 0;
+  char buf[ESP_UART_RX_BUFFER_SIZE];
+
+  while (millis() - start < DEVICE_REPLY_TIMEOUT_MS) {
+    if (esp_uart_receive(buf, sizeof(buf), 20)) {
+      String pkt = String(buf);
+      pkt.trim();
+      bool match = pkt.startsWith(expectPrefix);
+      if (!handleDevicePacket(pkt)) esp_uart_processCommand(buf);
+      if (match && ++got >= expectCount) return true;
+    }
+    yield();
+  }
+  return false;
+}
+
+static bool syncSettings()  { return requestFromDevice("@SETTINGS:GET#",  "@SETTINGS_DATA:",  1); }
+static bool syncTimer()     { return requestFromDevice("@TINFO#",         "@TSLOT:",          5); }
+static bool syncTwist()     { return requestFromDevice("@TWIST:GET#",     "@TWIST_DATA:",     1); }
+static bool syncCountdown() { return requestFromDevice("@COUNTDOWN:GET#", "@COUNTDOWN_DATA:", 1); }
+
+
+/* ======================================================
    JSON HELPERS
 ====================================================== */
 
@@ -398,8 +551,9 @@ static String buildStatusJson() {
   return j;
 }
 
-static String buildSettingsJson() {
+static String buildSettingsJson(bool fromDevice) {
   String j = "{";
+  j += "\"fromDevice\":" + String(fromDevice ? 1 : 0) + ",";
   j += "\"dryRunGap\":" + String(g_settings.dryRunGap) + ",";
   j += "\"testingGap\":" + String(g_settings.testingGap) + ",";
   j += "\"maxRun\":" + String(g_settings.maxRun) + ",";
@@ -410,26 +564,24 @@ static String buildSettingsJson() {
   j += "\"underLoad\":" + String(g_settings.underLoad) + ",";
   j += "\"powerRestore\":" + String(g_settings.powerRestore) + ",";
   j += "\"dryRunGap_en\":" + String(g_settings.dryRunEn) + ",";
-  j += "\"testingGap_en\":" + String(g_settings.testingEn) + ",";
   j += "\"maxRun_en\":" + String(g_settings.maxRunEn) + ",";
   j += "\"retryCount_en\":" + String(g_settings.retryEn) + ",";
   j += "\"lowVolt_en\":" + String(g_settings.lowVoltEn) + ",";
   j += "\"highVolt_en\":" + String(g_settings.highVoltEn) + ",";
   j += "\"overLoad_en\":" + String(g_settings.overLoadEn) + ",";
   j += "\"underLoad_en\":" + String(g_settings.underLoadEn) + ",";
-  j += "\"powerRestore_en\":1,";
-  j += "\"buzzerEnable\":" + String(g_settings.buzzerPump) + ",";
-  j += "\"buzzerTankFull\":" + String(g_settings.buzzerFull) + ",";
-  j += "\"buzzerTankEmpty\":" + String(g_settings.buzzerEmpty) + ",";
-  j += "\"buzzerMotorRunning\":" + String(g_settings.buzzerPump) + "}";
+  j += "\"buzzerPump\":" + String(g_settings.buzzerPump) + ",";
+  j += "\"buzzerFull\":" + String(g_settings.buzzerFull) + ",";
+  j += "\"buzzerEmpty\":" + String(g_settings.buzzerEmpty) + "}";
   return j;
 }
 
-static String buildTimerJson() {
+static String buildTimerJson(bool fromDevice) {
   String j = "{";
+  j += "\"fromDevice\":" + String(fromDevice ? 1 : 0) + ",";
+  j += "\"timerActive\":" + String(g_liveMode == "TIMER" ? 1 : 0);
   for (int i = 0; i < 5; i++) {
-    if (i) j += ",";
-    j += "\"slot" + String(i + 1) + "\":{";
+    j += ",\"slot" + String(i + 1) + "\":{";
     j += "\"enabled\":" + String(g_timer[i].enabled ? 1 : 0) + ",";
     j += "\"days\":" + jsonStr(g_timer[i].days) + ",";
     j += "\"on\":" + jsonStr(g_timer[i].onTime) + ",";
@@ -439,16 +591,18 @@ static String buildTimerJson() {
   return j;
 }
 
-static String buildCountdownJson() {
+static String buildCountdownJson(bool fromDevice) {
   String j = "{";
+  j += "\"fromDevice\":" + String(fromDevice ? 1 : 0) + ",";
   j += "\"active\":" + String(g_countdown.active ? 1 : 0) + ",";
   j += "\"duration\":" + String(g_countdown.duration) + ",";
   j += "\"remaining\":" + String(g_countdown.remaining) + "}";
   return j;
 }
 
-static String buildTwistJson() {
+static String buildTwistJson(bool fromDevice) {
   String j = "{";
+  j += "\"fromDevice\":" + String(fromDevice ? 1 : 0) + ",";
   j += "\"active\":" + String(g_twist.active ? 1 : 0) + ",";
   j += "\"onDuration\":" + String(g_twist.onDuration) + ",";
   j += "\"offDuration\":" + String(g_twist.offDuration) + ",";
@@ -478,7 +632,7 @@ void start_webserver() {
   pinMode(MOTOR_PIN, OUTPUT);
   digitalWrite(MOTOR_PIN, LOW);
 
-  /* ── EEPROM: initialise and restore user values ── */
+  /* ── EEPROM: last known values until the STM32 answers ── */
   EEPROM.begin(EEPROM_SIZE);
   loadFromEEPROM();
 
@@ -493,7 +647,7 @@ void start_webserver() {
     server.send(200, "application/json", buildStatusJson());
   });
 
-  /* ── GET endpoints for page pre-population ── */
+  /* ── GET endpoints: read the device first, then answer ── */
   server.on("/get_status", HTTP_GET, []() {
     setCORSHeaders();
     server.send(200, "application/json", buildStatusJson());
@@ -501,29 +655,32 @@ void start_webserver() {
 
   server.on("/get_settings", HTTP_GET, []() {
     setCORSHeaders();
-    server.send(200, "application/json", buildSettingsJson());
+    bool ok = syncSettings();
+    if (ok) saveToEEPROM();
+    server.send(200, "application/json", buildSettingsJson(ok));
   });
 
   server.on("/get_timer", HTTP_GET, []() {
     setCORSHeaders();
-    server.send(200, "application/json", buildTimerJson());
+    bool ok = syncTimer();
+    if (ok) saveToEEPROM();
+    server.send(200, "application/json", buildTimerJson(ok));
   });
 
   server.on("/get_countdown", HTTP_GET, []() {
     setCORSHeaders();
-    server.send(200, "application/json", buildCountdownJson());
+    bool ok = syncCountdown();
+    server.send(200, "application/json", buildCountdownJson(ok));
   });
 
   server.on("/get_twist", HTTP_GET, []() {
     setCORSHeaders();
-    server.send(200, "application/json", buildTwistJson());
+    bool ok = syncTwist();
+    if (ok) saveToEEPROM();
+    server.send(200, "application/json", buildTwistJson(ok));
   });
 
-  /* ── MODE TOGGLES ──
-     FIX: return {"mode":"..."} JSON instead of plain "OK" so the
-     dashboard JS can update buttons and mode text without re-fetching
-     the full status (which was causing the spurious 100% level jump).
-  ── */
+  /* ── MODE TOGGLES ── */
   server.on("/auto_toggle", HTTP_GET, []() {
     setCORSHeaders();
     setMode("AUTO");
@@ -547,6 +704,8 @@ void start_webserver() {
     server.send(200, "text/html", timerModeHtml);
   });
 
+  /* All five slots are sent - a slot switched off is sent with
+     enabled=0, so unchecking it is stored on the device. */
   server.on("/timer/set", HTTP_GET, []() {
     bool anyEnabled = false;
 
@@ -555,7 +714,7 @@ void start_webserver() {
       if (!server.hasArg(slotKey)) continue;
 
       int idx = i - 1;
-      g_timer[idx].enabled = server.arg(slotKey).toInt();
+      g_timer[idx].enabled = server.arg(slotKey).toInt() != 0;
       g_timer[idx].days = server.arg("days" + String(i));
       g_timer[idx].onTime = server.arg("on" + String(i));
       g_timer[idx].offTime = server.arg("off" + String(i));
@@ -574,11 +733,23 @@ void start_webserver() {
       if (g_timer[idx].enabled) anyEnabled = true;
     }
 
-    if (anyEnabled) setMode("TIMER");
-    else setMode("STANDBY");
+    if (anyEnabled) {
+      sendPacket("@TIMER:ON#");
+      g_liveMode = "TIMER";
+    } else if (g_liveMode == "TIMER") {
+      sendPacket("@TIMER:OFF#");
+      g_liveMode = "STANDBY";
+    }
 
-    saveToEEPROM(); /* persist timer settings */
-    server.send(200, "text/plain", "Timer Updated");
+    saveToEEPROM();
+    server.send(200, "text/plain", anyEnabled ? "Timer saved and started"
+                                              : "Timer saved (no slot enabled)");
+  });
+
+  server.on("/timer_stop", HTTP_GET, []() {
+    sendPacket("@TIMER:OFF#");
+    if (g_liveMode == "TIMER") g_liveMode = "STANDBY";
+    server.send(200, "text/plain", "Timer Stopped");
   });
 
   /* ── COUNTDOWN PAGE ── */
@@ -586,19 +757,21 @@ void start_webserver() {
     server.send(200, "text/html", countdownModeHtml);
   });
 
+  /* duration arrives in seconds from the page; the STM32 takes minutes */
   server.on("/start_countdown", HTTP_GET, []() {
     int dur = server.arg("duration").toInt();
     if (dur < 60) dur = 60;
     if (dur > 10800) dur = 10800;
+    int mins = (dur + 59) / 60;
 
-    g_countdown.duration = dur;
-    g_countdown.remaining = dur;
+    g_countdown.duration = mins * 60;
+    g_countdown.remaining = mins * 60;
     g_countdown.active = true;
 
-    sendPacket("@COUNTDOWN:ON:" + String(dur) + "#");
-    setMode("COUNTDOWN");
+    sendPacket("@COUNTDOWN:ON:" + String(mins) + "#");
+    g_liveMode = "COUNTDOWN";
 
-    saveToEEPROM(); /* persist countdown duration */
+    saveToEEPROM();
     server.send(200, "text/plain", "Countdown Started");
   });
 
@@ -607,11 +780,8 @@ void start_webserver() {
     g_countdown.remaining = 0;
 
     sendPacket("@COUNTDOWN:OFF#");
-    setMode("STANDBY");
+    if (g_liveMode == "COUNTDOWN") g_liveMode = "STANDBY";
 
-    /* Note: only duration (config) is saved; active=false is not persisted
-       because countdown should never auto-resume after power cycle */
-    saveToEEPROM();
     server.send(200, "text/plain", "Countdown Stopped");
   });
 
@@ -636,6 +806,8 @@ void start_webserver() {
     server.send(200, "application/json", j);
   });
 
+  /* On/off durations in minutes. TWIST:SET also starts twist on the
+     STM32, so no separate mode packet is sent. */
   server.on("/twist_submit", HTTP_GET, []() {
     g_twist.onDuration = server.arg("onDuration").toInt();
     g_twist.offDuration = server.arg("offDuration").toInt();
@@ -654,17 +826,16 @@ void start_webserver() {
                + String(g_twist.offDuration) + ":"
                + String(onH) + ":" + String(onM) + ":"
                + String(offH) + ":" + String(offM) + "#");
+    g_liveMode = "TWIST";
 
-    setMode("TWIST");
-    saveToEEPROM(); /* persist twist settings */
-    server.send(200, "text/plain", "Twist Updated");
+    saveToEEPROM();
+    server.send(200, "text/plain", "Twist saved and started");
   });
 
   server.on("/twist_stop", HTTP_GET, []() {
     g_twist.active = false;
     sendPacket("@TWIST:OFF#");
-    setMode("STANDBY");
-    saveToEEPROM();
+    if (g_liveMode == "TWIST") g_liveMode = "STANDBY";
     server.send(200, "text/plain", "Twist Stopped");
   });
 
@@ -699,12 +870,22 @@ void start_webserver() {
       g_settings.buzzerFull,
       g_settings.buzzerEmpty);
 
-    saveToEEPROM(); /* persist settings */
-    server.send(200, "text/plain", "Settings Updated");
+    /* The STM32 answers a SET with @SOK and its stored values */
+    bool ok = requestFromDevice("", "@SETTINGS_DATA:", 1);
+    saveToEEPROM();
+    server.send(200, "text/plain", ok ? "Settings saved on device"
+                                      : "Sent - device did not confirm");
+  });
+
+  server.on("/factory_reset", HTTP_GET, []() {
+    sendPacket("@FACTORY:RESET#");
+    bool ok = requestFromDevice("", "@SETTINGS_DATA:", 1);
+    saveToEEPROM();
+    server.send(200, "text/plain", ok ? "Factory reset done"
+                                      : "Sent - device did not confirm");
   });
 
   server.begin();
-  Serial.println("✅ Web server started — all endpoints active");
 }
 
 
@@ -716,20 +897,11 @@ void handleClient() {
   server.handleClient();
   esp_uart_autoStatusRequest();
 
-  char rxBuf[256];
+  char rxBuf[ESP_UART_RX_BUFFER_SIZE];
   if (esp_uart_receive(rxBuf, sizeof(rxBuf), 10)) {
     String pkt = String(rxBuf);
     pkt.trim();
-
-    if (pkt.startsWith("@STATUS:")) {
-      parseStatus(pkt);
-    } else if (pkt.startsWith("@SOK#")) {
-      Serial.println("✅ STM32 settings saved");
-    } else if (pkt.startsWith("@COUNTDOWN:DONE") || pkt == "@COUNTDOWN_OFF#") {
-      g_countdown.active = false;
-      g_countdown.remaining = 0;
-    } else {
+    if (!handleDevicePacket(pkt))
       esp_uart_processCommand(rxBuf);
-    }
   }
 }

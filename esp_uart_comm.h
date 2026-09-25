@@ -2,10 +2,10 @@
 #pragma once
 #include <Arduino.h>
 
-#define ESP_UART_RX_BUFFER_SIZE 128
+#define ESP_UART_RX_BUFFER_SIZE 256   /* STM32 settings reply is ~110 chars */
 #define ESP_UART_BAUD_RATE      115200
 #define ESP_UART_DELIMITER      '#'
-#define ESP_UART_ENABLE_DEBUG   0
+#define ESP_UART_ENABLE_DEBUG   0     /* Serial IS the STM32 link: keep 0 in use */
 
 void esp_uart_init();
 void esp_uart_send(const char *message);

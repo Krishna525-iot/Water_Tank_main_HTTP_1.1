@@ -165,7 +165,8 @@ button.secondary{
 <div class="wrap">
 <h1>Timer Mode</h1>
 <form id="timerForm"></form>
-<button type="submit" form="timerForm">Save Timer Settings</button>
+<button type="submit" form="timerForm">Save &amp; Start Timer</button>
+<button type="button" class="secondary" onclick="stopTimer()">Stop Timer Mode</button>
 <button type="button" class="secondary" onclick="location.href='/'">Back</button>
 <div id="result" class="result"></div>
 </div>
@@ -214,6 +215,7 @@ document.addEventListener("click", function(e){
   }
 });
 
+/* Slots come from the device itself (the ESP asks the STM32 first) */
 window.onload = function(){
   fetch('/get_timer')
   .then(res => res.json())
@@ -222,59 +224,70 @@ window.onload = function(){
       let slot = data["slot"+n];
       if(!slot) continue;
 
-      if(slot.enabled == 1){
-        document.getElementById(`en${n}`).checked = true;
-        document.getElementById(`on${n}`).disabled = false;
-        document.getElementById(`off${n}`).disabled = false;
-      }
+      const en = (slot.enabled == 1);
+      document.getElementById(`en${n}`).checked = en;
+      document.getElementById(`on${n}`).disabled = !en;
+      document.getElementById(`off${n}`).disabled = !en;
 
       if(slot.on)  document.getElementById(`on${n}`).value = slot.on;
       if(slot.off) document.getElementById(`off${n}`).value = slot.off;
 
+      document.querySelectorAll(`#days${n} .day`).forEach(el=>el.classList.remove("active"));
       if(slot.days){
-        let arr = slot.days.split(",");
-        arr.forEach(d=>{
+        slot.days.split(",").forEach(d=>{
           let el = document.querySelector(`#days${n} .day[data-d='${d}']`);
           if(el) el.classList.add("active");
         });
       }
     }
+    if (data.fromDevice != 1)
+      show("Device not responding - showing last known values", "error");
+    else
+      show(data.timerActive == 1 ? "Timer mode is running" : "Timer mode is off", "success");
   })
-  .catch(err => console.log("Timer load error:", err));
+  .catch(err => show("Failed to load timer", "error"));
 };
 
+/* All five slots are sent: a switched-off slot goes as slotN=0, so
+   unchecking it is saved on the device. Saving with at least one slot
+   on starts Timer mode. */
 form.onsubmit = e => {
   e.preventDefault();
   let q = [], any = false, bad = [];
 
   for (let n = 1; n <= 5; n++) {
-    if (!document.getElementById(`en${n}`).checked) continue;
-
-    any = true;
+    const en = document.getElementById(`en${n}`).checked;
     let days = [...document.querySelectorAll(`#days${n} .active`)]
                 .map(d => d.dataset.d);
-    let on = document.getElementById(`on${n}`).value;
-    let off = document.getElementById(`off${n}`).value;
+    let on  = document.getElementById(`on${n}`).value  || "00:00";
+    let off = document.getElementById(`off${n}`).value || "00:00";
 
-    if (!days.length || !on || !off) {
-      bad.push(n);
-      continue;
+    if (en) {
+      any = true;
+      if (!days.length || on === off) { bad.push(n); continue; }
     }
 
-    q.push(`slot${n}=1`);
+    q.push(`slot${n}=${en ? 1 : 0}`);
     q.push(`days${n}=${days.join(",")}`);
     q.push(`on${n}=${on}`);
     q.push(`off${n}=${off}`);
   }
 
-  if (!any) return show("Enable at least one slot", "error");
-  if (bad.length) return show("Incomplete slot(s): " + bad.join(","), "error");
+  if (bad.length) return show("Incomplete slot(s): " + bad.join(",") +
+                              " (pick days and different ON/OFF times)", "error");
 
   fetch("/timer/set?" + q.join("&"))
     .then(r => r.text())
     .then(t => show(t, "success"))
     .catch(e => show(e.message, "error"));
 };
+
+function stopTimer(){
+  fetch("/timer_stop")
+    .then(r => r.text())
+    .then(t => show(t, "success"))
+    .catch(e => show(e.message, "error"));
+}
 
 function show(msg,type){
   let r=document.getElementById("result");

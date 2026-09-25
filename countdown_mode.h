@@ -64,13 +64,23 @@ const char* countdownModeHtml = R"rawliteral(
   let ticker    = null;
   let isActive  = false;
 
-  /* ── restore last set duration on page load — never auto-start ── */
+  /* ── on load: read the device; show a running countdown, otherwise
+        the saved duration — never auto-start ── */
   window.addEventListener('load', async () => {
     try {
       const r = await fetch('/get_countdown');
       const d = await r.json();
 
-      if (d.duration && d.duration > 0) {
+      if (d.duration && d.duration > 0)
+        document.getElementById('duration').value = Math.round(d.duration / 60);
+
+      if (d.active == 1 && d.remaining > 0) {
+        remaining = d.remaining;
+        setActiveUI();
+        clearInterval(ticker);
+        tick();
+        ticker = setInterval(tick, 1000);
+      } else if (d.duration && d.duration > 0) {
         document.getElementById('duration').value = Math.round(d.duration / 60);
         document.getElementById('countdownDisplay').textContent =
           'Last set: ' + Math.round(d.duration / 60) + ' min';

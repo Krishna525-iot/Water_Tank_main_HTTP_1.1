@@ -5,6 +5,12 @@
  *  1. Status packet parsed positionally (@STATUS:ON:75:AUTO#)
  *     instead of searching for labels ("MOTOR:" etc.) that don't exist
  *  2. g_waterLevel now correctly stores the raw % from STM32
+ *  3. Serial is BOTH the debug port and the STM32 link. Printing a
+ *     received packet ("Unknown packet: @...#") sent it straight back to
+ *     the STM32, which executed it as a command. All prints here are
+ *     debug-only now, and packets are never echoed.
+ *  4. Packets are spaced out: the STM32 main loop takes ~100 ms per pass.
+ *  5. Status is polled every 3 s (was every 10 min with the motor off).
  */
 
 #include "esp_uart_comm.h"
@@ -19,6 +25,10 @@ extern String g_liveMode;      // defined in web_server.cpp
 static char s_rxBuffer[ESP_UART_RX_BUFFER_SIZE];
 static int  s_rxBufferIndex = 0;
 static unsigned long s_lastStatusRequest = 0;
+static unsigned long s_lastSend = 0;
+
+#define ESP_UART_MIN_GAP_MS     60UL
+#define ESP_UART_STATUS_POLL_MS 3000UL
 
 #if ESP_UART_ENABLE_DEBUG
   #define DBG_PRINT(...)     Serial.printf(__VA_ARGS__)
@@ -60,18 +70,18 @@ void esp_uart_send(const char *message) {
 
   pkt += "\r\n";
 
+  while (millis() - s_lastSend < ESP_UART_MIN_GAP_MS) { delay(1); }
+
   Serial.write(pkt.c_str(), pkt.length());
   Serial.flush();
-
-#if ESP_UART_ENABLE_DEBUG
-  Serial.print("→ SENT: ");
-  Serial.println(pkt);
-#endif
+  s_lastSend = millis();
 }
 
 
 /* =====================================================
    SETTINGS SENDER
+   Only keys the STM32 understands (it ignores the rest, and
+   long packets risk overflowing its receive buffer).
 ===================================================== */
 
 void esp_uart_sendSettings(
@@ -96,15 +106,21 @@ void esp_uart_sendSettings(
   int buzzerFull,
   int buzzerEmpty)
 {
-  char pkt[220];
+  (void)testing_en;
+  char pkt[160];
   snprintf(pkt, sizeof(pkt),
-    "@SET:D=%d;T=%d;M=%d;RC=%d;LV=%d;HV=%d;OL=%d;UL=%d;PR=%d;"
-    "DE=%d;TE=%d;ME=%d;RCE=%d;LVE=%d;HVE=%d;OLE=%d;ULE=%d;"
+    "@SET:D=%d;T=%d;M=%d;RC=%d;LV=%d;HV=%d;OL=%d;UL=%d;PR=%d;DE=%d;"
     "BZ=%d;BF=%d;BE=%d#",
-    dryRun, testingGap, maxRun, retry,
-    lowVolt, highVolt, overLoad, underLoad, powerRestore,
-    dryRun_en, testing_en, maxRun_en, retry_en,
-    lowVolt_en, highVolt_en, overLoad_en, underLoad_en,
+    dryRun_en    ? dryRun    : 0,
+    testingGap,
+    maxRun_en    ? maxRun    : 0,
+    retry_en     ? retry     : 0,
+    lowVolt_en   ? lowVolt   : 0,
+    highVolt_en  ? highVolt  : 0,
+    overLoad_en  ? overLoad  : 0,
+    underLoad_en ? underLoad : 0,
+    powerRestore,
+    dryRun_en ? 1 : 0,
     buzzerEnable, buzzerFull, buzzerEmpty);
 
   esp_uart_send(pkt);
@@ -174,10 +190,8 @@ void esp_uart_requestStatus() {
 
 void esp_uart_autoStatusRequest() {
   unsigned long now = millis();
-  unsigned long interval =
-      (g_motorStatus == "ON") ? 10000UL : (10UL * 60UL * 1000UL);
 
-  if (now - s_lastStatusRequest >= interval) {
+  if (now - s_lastStatusRequest >= ESP_UART_STATUS_POLL_MS) {
     esp_uart_requestStatus();
     s_lastStatusRequest = now;
   }
@@ -205,14 +219,14 @@ static void parseStatusFields(const String &body)
 
   autoMode_applyStatusFromSTM32(g_liveMode);
 
-  Serial.printf("📶 STATUS → Motor:%s | Level:%d%% | Mode:%s\n",
-                g_motorStatus.c_str(),
-                level,
-                g_liveMode.c_str());
+  DBG_PRINT("STATUS -> Motor:%s | Level:%d%% | Mode:%s\n",
+            g_motorStatus.c_str(), level, g_liveMode.c_str());
 }
 
 /* =====================================================
    COMMAND PROCESSOR
+   Fallback for packets web_server.cpp does not consume. Never print a
+   received packet on Serial - it would go back to the STM32.
 ===================================================== */
 
 void esp_uart_processCommand(const char *cmd) {
@@ -229,32 +243,7 @@ void esp_uart_processCommand(const char *cmd) {
     return;
   }
 
-  /* ── SETTINGS ACK ── */
-  if (strstr(cmd, "@SOK#")) {
-    Serial.println("✅ STM32 SETTINGS SAVED");
-    return;
-  }
-
-  /* ── LEGACY ACK ── */
-  if (strncmp(cmd, "@ACK:", 5) == 0) {
-    Serial.print("ACK → ");
-    Serial.println(cmd);
-    return;
-  }
-
-  /* ── ERROR ── */
-  if (strncmp(cmd, "@ERR:", 5) == 0) {
-    Serial.print("ERR → ");
-    Serial.println(cmd);
-    return;
-  }
-
-  /* ── PONG ── */
-  if (strstr(cmd, "@PONG#")) {
-    DBG_PRINTLN("PONG received");
-    return;
-  }
-
-  Serial.print("❓ Unknown packet: ");
-  Serial.println(cmd);
+  /* Acks (@SOK:.., @AUTO_ON#, @TIMER_SET_OK#, ...), errors, pong and
+     anything else: nothing to do. */
+  DBG_PRINT("Unhandled packet (%u bytes)\n", (unsigned)strlen(cmd));
 }

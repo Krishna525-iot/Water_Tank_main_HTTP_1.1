@@ -187,9 +187,9 @@ input:checked + .slider:before {
 <div class="section-title">Device Protection</div>
 
 <div class="setting-row">
-<div class="setting-left">Dry Run Gap (minutes)</div>
+<div class="setting-left">Dry Run (minutes)</div>
 <div class="setting-right">
-<input type="number" id="dryRunGap">
+<input type="number" id="dryRunGap" min="1" max="180">
 <label class="switch">
 <input type="checkbox" id="dryRunGap_en" onchange="toggleInput('dryRunGap','dryRunGap_en')">
 <span class="slider"></span>
@@ -200,18 +200,14 @@ input:checked + .slider:before {
 <div class="setting-row">
 <div class="setting-left">Testing Gap (minutes)</div>
 <div class="setting-right">
-<input type="number" id="testingGap">
-<label class="switch">
-<input type="checkbox" id="testingGap_en" onchange="toggleInput('testingGap','testingGap_en')">
-<span class="slider"></span>
-</label>
+<input type="number" id="testingGap" min="1" max="180">
 </div>
 </div>
 
 <div class="setting-row">
 <div class="setting-left">Maximum Run Time (minutes)</div>
 <div class="setting-right">
-<input type="number" id="maxRun">
+<input type="number" id="maxRun" min="1" max="1440">
 <label class="switch">
 <input type="checkbox" id="maxRun_en" onchange="toggleInput('maxRun','maxRun_en')">
 <span class="slider"></span>
@@ -222,7 +218,7 @@ input:checked + .slider:before {
 <div class="setting-row">
 <div class="setting-left">Retry Count</div>
 <div class="setting-right">
-<input type="number" id="retryCount">
+<input type="number" id="retryCount" min="1" max="20">
 <label class="switch">
 <input type="checkbox" id="retryCount_en" onchange="toggleInput('retryCount','retryCount_en')">
 <span class="slider"></span>
@@ -259,7 +255,7 @@ input:checked + .slider:before {
 </div>
 
 <div class="setting-row">
-<div class="setting-left">Over Load Current</div>
+<div class="setting-left">Over Load Current (A)</div>
 <div class="setting-right">
 <input type="number" id="overLoad">
 <label class="switch">
@@ -270,7 +266,7 @@ input:checked + .slider:before {
 </div>
 
 <div class="setting-row">
-<div class="setting-left">Under Load Current</div>
+<div class="setting-left">Under Load Current (A)</div>
 <div class="setting-right">
 <input type="number" id="underLoad">
 <label class="switch">
@@ -286,30 +282,45 @@ input:checked + .slider:before {
 <div class="section">
 <div class="section-title">Power Restore Behaviour</div>
 <div class="setting-row">
-<div class="setting-left">Power Restore Mode</div>
+<div class="setting-left">Power Restore</div>
 <div class="setting-right">
 <select id="powerRestore">
-<option value="0">Always ON</option>
-<option value="1">Stay OFF</option>
-<option value="2">Restore Previous</option>
+<option value="0">ON (restore last mode)</option>
+<option value="1">OFF (manual, motor off)</option>
 </select>
-<label class="switch">
-<input type="checkbox" id="powerRestore_en" onchange="toggleInput('powerRestore','powerRestore_en')">
-<span class="slider"></span>
-</label>
 </div>
 </div>
 </div>
 
-<!-- BUZZER SETTINGS — single master on/off only -->
+<!-- BUZZER SETTINGS -->
 <div class="section">
 <div class="section-title">Buzzer Control</div>
 
 <div class="setting-row">
-<div class="setting-left">Buzzer</div>
+<div class="setting-left">During pump on (as long as pump runs)</div>
 <div class="setting-right">
 <label class="switch">
-<input type="checkbox" id="buzzerEnable">
+<input type="checkbox" id="buzzerPump">
+<span class="slider"></span>
+</label>
+</div>
+</div>
+
+<div class="setting-row">
+<div class="setting-left">Tank full (30 s)</div>
+<div class="setting-right">
+<label class="switch">
+<input type="checkbox" id="buzzerFull">
+<span class="slider"></span>
+</label>
+</div>
+</div>
+
+<div class="setting-row">
+<div class="setting-left">Tank empty (15 s)</div>
+<div class="setting-right">
+<label class="switch">
+<input type="checkbox" id="buzzerEmpty">
 <span class="slider"></span>
 </label>
 </div>
@@ -326,55 +337,62 @@ input:checked + .slider:before {
         style="width:100%;margin-top:14px;"
         onclick="location.href='/'">Back</button>
 
-<div id="status" class="status">Loading...</div>
+<div id="status" class="status">Reading device...</div>
 
 </div>
 </div>
 
 <script>
 
-window.onload = function(){
+/* Every field the page shows, as returned by /get_settings */
+const FIELDS = [
+  "dryRunGap",  "dryRunGap_en",
+  "testingGap",
+  "maxRun",     "maxRun_en",
+  "retryCount", "retryCount_en",
+  "lowVolt",    "lowVolt_en",
+  "highVolt",   "highVolt_en",
+  "overLoad",   "overLoad_en",
+  "underLoad",  "underLoad_en",
+  "powerRestore",
+  "buzzerPump", "buzzerFull", "buzzerEmpty"
+];
 
-  fetch('/get_settings')
+/* Values come from the device itself (the ESP asks the STM32 first) */
+function loadSettings(msg){
+  const status = document.getElementById("status");
+  status.className = "status";
+  status.innerText = "Reading device...";
+
+  return fetch('/get_settings')
   .then(res => res.json())
   .then(data => {
-
-    /* numeric / select fields with paired _en toggles */
-    let ids = [
-      "dryRunGap",    "dryRunGap_en",
-      "testingGap",   "testingGap_en",
-      "maxRun",       "maxRun_en",
-      "retryCount",   "retryCount_en",
-      "lowVolt",      "lowVolt_en",
-      "highVolt",     "highVolt_en",
-      "overLoad",     "overLoad_en",
-      "underLoad",    "underLoad_en",
-      "powerRestore", "powerRestore_en",
-      "buzzerEnable"
-    ];
-
-    ids.forEach(id => {
-      if (data[id] !== undefined) {
-        let el = document.getElementById(id);
-        if (el.type === "checkbox")
-          el.checked = data[id] == 1;
-        else
-          el.value = data[id];
-      }
+    FIELDS.forEach(id => {
+      if (data[id] === undefined) return;
+      const el = document.getElementById(id);
+      if (el.type === "checkbox") el.checked = data[id] == 1;
+      else                        el.value   = data[id];
     });
 
-    /* apply disabled state for all _en toggles */
-    ids.forEach(id => {
-      if (id.endsWith("_en"))
-        toggleInput(id.replace("_en", ""), id);
+    FIELDS.forEach(id => {
+      if (id.endsWith("_en")) toggleInput(id.replace("_en", ""), id);
     });
 
-    document.getElementById("status").innerText = "Ready";
+    if (data.fromDevice == 1) {
+      status.className = "status success";
+      status.innerText = msg || "Showing current device settings";
+    } else {
+      status.className = "status error";
+      status.innerText = "Device not responding - showing last known values";
+    }
   })
   .catch(() => {
-    document.getElementById("status").innerText = "Failed to load settings";
+    status.className = "status error";
+    status.innerText = "Failed to load settings";
   });
-};
+}
+
+window.onload = function(){ loadSettings(); };
 
 function toggleInput(inputId, toggleId){
   let input  = document.getElementById(inputId);
@@ -385,100 +403,55 @@ function toggleInput(inputId, toggleId){
     input.classList.remove("disabled-input");
 }
 
-/* ================================================================
-   KEY MAP — only what is sent to STM32.
-   The three sub-buzzer keys (BF, BE, BR) are derived from the
-   single master buzzerEnable toggle so the STM32 packet is
-   unchanged and all existing firmware logic continues to work.
-================================================================ */
+/* page field -> STM32 key. The number is always sent with its *E toggle;
+   the ESP sends 0 (= disabled) to the device when a toggle is off and
+   keeps the number for when it is switched back on. */
 const keyMap = {
-  dryRunGap       : "D",
-  dryRunGap_en    : "DE",
-  testingGap      : "T",
-  testingGap_en   : "TE",
-  maxRun          : "M",
-  maxRun_en       : "ME",
-  retryCount      : "RC",
-  retryCount_en   : "RCE",
-  lowVolt         : "LV",
-  lowVolt_en      : "LVE",
-  highVolt        : "HV",
-  highVolt_en     : "HVE",
-  overLoad        : "OL",
-  overLoad_en     : "OLE",
-  underLoad       : "UL",
-  underLoad_en    : "ULE",
-  powerRestore    : "PR",
-  powerRestore_en : "PRE"
+  dryRunGap  : "D",
+  testingGap : "T",
+  maxRun     : "M",
+  retryCount : "RC",
+  lowVolt    : "LV",
+  highVolt   : "HV",
+  overLoad   : "OL",
+  underLoad  : "UL",
+  powerRestore : "PR"
 };
 
 const enableMap = {
-  dryRunGap    : "dryRunGap_en",
-  testingGap   : "testingGap_en",
-  maxRun       : "maxRun_en",
-  retryCount   : "retryCount_en",
-  lowVolt      : "lowVolt_en",
-  highVolt     : "highVolt_en",
-  overLoad     : "overLoad_en",
-  underLoad    : "underLoad_en",
-  powerRestore : "powerRestore_en"
+  dryRunGap  : "dryRunGap_en",
+  maxRun     : "maxRun_en",
+  retryCount : "retryCount_en",
+  lowVolt    : "lowVolt_en",
+  highVolt   : "highVolt_en",
+  overLoad   : "overLoad_en",
+  underLoad  : "underLoad_en"
 };
 
-/* ================================================================
-   APPLY
-   The single buzzerEnable toggle drives BZ, BF, BE and BR so the
-   STM32 packet stays identical to before — all three sub-buzzers
-   are set to the same value as the master toggle.
-   No other change to packet structure.
-================================================================ */
+const enableKey = {
+  dryRunGap_en : "DE",  maxRun_en   : "ME",  retryCount_en : "RCE",
+  lowVolt_en   : "LVE", highVolt_en : "HVE", overLoad_en   : "OLE",
+  underLoad_en : "ULE"
+};
+
 function apply(){
 
   const btn    = document.getElementById("applyBtn");
   const status = document.getElementById("status");
 
-  const ids = [
-    "dryRunGap",    "dryRunGap_en",
-    "testingGap",   "testingGap_en",
-    "maxRun",       "maxRun_en",
-    "retryCount",   "retryCount_en",
-    "lowVolt",      "lowVolt_en",
-    "highVolt",     "highVolt_en",
-    "overLoad",     "overLoad_en",
-    "underLoad",    "underLoad_en",
-    "powerRestore", "powerRestore_en"
-  ];
-
   let p = [];
 
-  ids.forEach(id => {
-    const el  = document.getElementById(id);
-    const key = keyMap[id] || id;
-
-    /* _en toggle fields */
-    if (id.endsWith("_en")) {
-      p.push(key + "=" + (el.checked ? 1 : 0));
-      return;
-    }
-
-    /* Numeric / select with paired _en: send 0 if toggle is OFF */
-    if (enableMap[id]) {
-      const toggleEl = document.getElementById(enableMap[id]);
-      if (!toggleEl.checked) {
-        p.push(key + "=0");
-        return;
-      }
-    }
-
-    /* Normal enabled field */
-    p.push(key + "=" + el.value);
+  Object.keys(keyMap).forEach(id => {
+    p.push(keyMap[id] + "=" + document.getElementById(id).value);
   });
 
-  /* Single buzzer master toggle drives all four buzzer keys */
-  const bz = document.getElementById("buzzerEnable").checked ? 1 : 0;
-  p.push("BZ=" + bz);   /* motor running sound  */
-  p.push("BF=" + bz);   /* tank full alert       */
-  p.push("BE=" + bz);   /* tank empty alert      */
-  p.push("BR=" + bz);   /* motor running alert   */
+  Object.keys(enableKey).forEach(id => {
+    p.push(enableKey[id] + "=" + (document.getElementById(id).checked ? 1 : 0));
+  });
+
+  p.push("BZ=" + (document.getElementById("buzzerPump").checked  ? 1 : 0));
+  p.push("BF=" + (document.getElementById("buzzerFull").checked  ? 1 : 0));
+  p.push("BE=" + (document.getElementById("buzzerEmpty").checked ? 1 : 0));
 
   btn.disabled = true;
   status.className = "status";
@@ -486,10 +459,7 @@ function apply(){
 
   fetch("/settings/set?data=" + encodeURIComponent(p.join(";")))
     .then(r => r.text())
-    .then(t => {
-      status.className = "status success";
-      status.innerText = t;
-    })
+    .then(t => loadSettings(t))       /* show what the device now holds */
     .catch(() => {
       status.className = "status error";
       status.innerText = "Failed to save settings";
@@ -498,10 +468,17 @@ function apply(){
 }
 
 function factoryReset(){
-  if (confirm("Reset device to factory default?")) {
-    fetch("/factory_reset")
-    .then(() => alert("Device reset completed"));
-  }
+  if (!confirm("Reset device to factory default?")) return;
+  const status = document.getElementById("status");
+  status.className = "status";
+  status.innerText = "Resetting...";
+  fetch("/factory_reset")
+    .then(r => r.text())
+    .then(t => loadSettings(t))
+    .catch(() => {
+      status.className = "status error";
+      status.innerText = "Factory reset failed";
+    });
 }
 
 </script>
