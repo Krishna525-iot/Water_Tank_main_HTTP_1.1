@@ -278,19 +278,7 @@ input:checked + .slider:before {
 
 </div>
 
-<!-- POWER RESTORE -->
-<div class="section">
-<div class="section-title">Power Restore Behaviour</div>
-<div class="setting-row">
-<div class="setting-left">Power Restore</div>
-<div class="setting-right">
-<select id="powerRestore">
-<option value="0">ON (restore last mode)</option>
-<option value="1">OFF (manual, motor off)</option>
-</select>
-</div>
-</div>
-</div>
+<!-- Power Restore removed: the device always restores the last mode (client decision) -->
 
 <!-- BUZZER SETTINGS -->
 <div class="section">
@@ -354,7 +342,6 @@ const FIELDS = [
   "highVolt",   "highVolt_en",
   "overLoad",   "overLoad_en",
   "underLoad",  "underLoad_en",
-  "powerRestore",
   "buzzerPump", "buzzerFull", "buzzerEmpty"
 ];
 
@@ -414,8 +401,7 @@ const keyMap = {
   lowVolt    : "LV",
   highVolt   : "HV",
   overLoad   : "OL",
-  underLoad  : "UL",
-  powerRestore : "PR"
+  underLoad  : "UL"
 };
 
 const enableMap = {
