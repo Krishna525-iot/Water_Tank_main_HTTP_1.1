@@ -766,6 +766,7 @@ void start_webserver() {
                  + String(onH) + ":" + String(onM) + ":"
                  + String(offH) + ":" + String(offM) + ":"
                  + String(g_timer[idx].enabled ? 1 : 0) + "#");
+      delay(40);   /* let the STM32 take each slot before the next one */
 
       if (g_timer[idx].enabled) anyEnabled = true;
     }
