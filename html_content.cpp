@@ -109,6 +109,23 @@ body {
 .twist     { background: #00695c; }
 .settings  { background: #6a1b9a; }
 
+/* Live data panel (refreshed every second) */
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  max-width: 520px;
+  margin: 0 auto 20px auto;
+}
+.live-cell {
+  border: 1px solid #cfd8dc;
+  border-radius: 10px;
+  padding: 8px 4px;
+}
+.live-cell .k { font-size: 12px; color: #546e7a; }
+.live-cell .v { font-size: 17px; font-weight: 700; }
+.live-stale { opacity: 0.45; }
+
 @media (max-width: 520px) {
   .button-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -129,6 +146,14 @@ body {
 </button>
 
 <div id="modeStatus" class="mode-text">Mode: UNKNOWN</div>
+
+<div id="liveGrid" class="live-grid live-stale">
+  <div class="live-cell"><div class="k">Voltage</div><div class="v" id="lvVolt">--</div></div>
+  <div class="live-cell"><div class="k">Current</div><div class="v" id="lvAmp">--</div></div>
+  <div class="live-cell"><div class="k">Time</div><div class="v" id="lvTime">--</div></div>
+  <div class="live-cell"><div class="k">G.W</div><div class="v" id="lvGw">--</div></div>
+  <div class="live-cell"><div class="k">Dry sensor</div><div class="v" id="lvDry">--</div></div>
+</div>
 
 <h2>Controls</h2>
 
@@ -210,8 +235,26 @@ async function toggleMotor() {
   }
 }
 
-setInterval(fetchStatus, 1000);
+/* Other data: voltage, current, G.W, dry sensor, time */
+async function fetchLive() {
+  try {
+    const res = await fetch("/live");
+    const d = await res.json();
+    document.getElementById("liveGrid").className =
+      d.fresh ? "live-grid" : "live-grid live-stale";
+    document.getElementById("lvVolt").innerHTML = d.volts + " V";
+    document.getElementById("lvAmp").innerHTML  = d.amps + " A";
+    document.getElementById("lvTime").innerHTML = d.time;
+    document.getElementById("lvGw").innerHTML   = d.gw ? "YES" : "NO";
+    document.getElementById("lvDry").innerHTML  = d.dryWater ? "WATER" : "DRY";
+  } catch (e) {}
+}
+
+/* Client DEC-16: motor / level / mode every 3 s, other data every 1 s */
+setInterval(fetchStatus, 3000);
+setInterval(fetchLive, 1000);
 fetchStatus();
+fetchLive();
 
 </script>
 

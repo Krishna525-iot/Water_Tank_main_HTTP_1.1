@@ -69,6 +69,16 @@ String g_motorStatus = "OFF";
 int g_liveLevel = 0;
 int g_waterLevel = 0;
 
+/* Live data from @LIVE (every second): voltage, current, G.W, dry, time */
+struct LiveCache {
+  int volts = 0;
+  String amps = "0.0";
+  int gw = 0;
+  int dryWater = 0;
+  String time = "--:--:--";
+  unsigned long at = 0;     /* millis() of the last packet, 0 = none yet */
+} g_live;
+
 
 /* ================= SETTINGS CACHE =================
    Defaults = STM32 factory defaults; replaced by the device's values
@@ -491,8 +501,21 @@ static void parseDeviceCountdown(const String &body) {
   g_countdown.active    = (f[2].toInt() != 0);
 }
 
+/* @LIVE:<volts>:<amps>:<gw>:<dryWater>:<hh>:<mm>:<ss># */
+static void parseLive(const String &body) {
+  String f[7];
+  if (splitColon(body, f, 7) < 7) return;
+  g_live.volts    = f[0].toInt();
+  g_live.amps     = f[1];
+  g_live.gw       = f[2].toInt();
+  g_live.dryWater = f[3].toInt();
+  g_live.time     = f[4] + ":" + f[5] + ":" + f[6];
+  g_live.at       = millis();
+}
+
 /* Route one packet from the STM32. Returns true if it was consumed. */
 static bool handleDevicePacket(const String &pkt) {
+  if (pkt.startsWith("@LIVE:"))           { parseLive(packetBody(pkt, "@LIVE:")); return true; }
   if (pkt.startsWith("@STATUS:"))         { parseStatus(pkt); return true; }
   if (pkt.startsWith("@SETTINGS_DATA:"))  { parseDeviceSettings(packetBody(pkt, "@SETTINGS_DATA:")); return true; }
   if (pkt.startsWith("@TSLOT:"))          { parseDeviceTimerSlot(packetBody(pkt, "@TSLOT:")); return true; }
@@ -645,6 +668,20 @@ void start_webserver() {
   server.on("/status", HTTP_GET, []() {
     setCORSHeaders();
     server.send(200, "application/json", buildStatusJson());
+  });
+
+  /* Other data, refreshed every second by the dashboard (DEC-16) */
+  server.on("/live", HTTP_GET, []() {
+    setCORSHeaders();
+    bool fresh = g_live.at != 0 && (millis() - g_live.at) < 5000UL;
+    String j = "{";
+    j += "\"fresh\":" + String(fresh ? 1 : 0) + ",";
+    j += "\"volts\":" + String(g_live.volts) + ",";
+    j += "\"amps\":" + jsonStr(g_live.amps) + ",";
+    j += "\"gw\":" + String(g_live.gw) + ",";
+    j += "\"dryWater\":" + String(g_live.dryWater) + ",";
+    j += "\"time\":" + jsonStr(g_live.time) + "}";
+    server.send(200, "application/json", j);
   });
 
   /* ── GET endpoints: read the device first, then answer ── */
