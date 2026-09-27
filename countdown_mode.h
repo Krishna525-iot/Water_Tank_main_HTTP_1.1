@@ -53,7 +53,7 @@ const char* countdownModeHtml = R"rawliteral(
 <div class="container">
   <h1>Countdown Mode</h1>
   <label>Duration (minutes)</label>
-  <input type="number" id="duration" min="1" max="180" placeholder="1 – 180" />
+  <input type="number" id="duration" min="1" max="15" placeholder="1 – 15" />
   <button id="toggleBtn" class="button" onclick="handleToggle()">Start</button>
   <div id="countdownDisplay"></div>
   <p id="message"></p>
@@ -112,8 +112,8 @@ const char* countdownModeHtml = R"rawliteral(
     if (isActive) { await stopCountdown(); return; }
 
     const mins = parseInt(document.getElementById('duration').value);
-    if (!mins || mins < 1 || mins > 180) {
-      alert('Enter a value between 1 and 180 minutes.'); return;
+    if (!mins || mins < 1 || mins > 15) {
+      alert('Enter a value between 1 and 15 minutes.'); return;
     }
     try {
       const r   = await fetch(`/start_countdown?duration=${mins * 60}`);
