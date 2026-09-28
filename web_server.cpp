@@ -915,6 +915,22 @@ void start_webserver() {
                                       : "Sent - device did not confirm");
   });
 
+  /* Voltage / current calibration against a meter: @CAL:V:<volts># or
+     @CAL:I:<amps>#; the device answers @CAL_OK# or @CAL_ERR#. */
+  server.on("/calibrate", HTTP_GET, []() {
+    setCORSHeaders();
+    String type = server.arg("type");
+    String value = server.arg("value");
+    if ((type != "V" && type != "I") || value.length() == 0) {
+      server.send(400, "text/plain", "Bad request");
+      return;
+    }
+    sendPacket("@CAL:" + type + ":" + value + "#");
+    bool ok = requestFromDevice("", "@CAL_OK#", 1);
+    server.send(200, "text/plain", ok ? "Calibrated - device confirmed"
+                                      : "Not accepted (motor must run for current; 50-400 V for voltage)");
+  });
+
   server.on("/factory_reset", HTTP_GET, []() {
     sendPacket("@FACTORY:RESET#");
     bool ok = requestFromDevice("", "@SETTINGS_DATA:", 1);

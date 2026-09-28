@@ -328,6 +328,27 @@ input:checked + .slider:before {
 
 </div>
 
+<div class="section">
+<div class="section-title">Calibration (against a meter)</div>
+
+<div class="setting-row">
+<div class="setting-left">Meter voltage (V)</div>
+<div class="setting-right">
+<input type="number" id="calVolt" min="50" max="400" placeholder="230">
+<button type="button" class="btn btn-secondary" onclick="calibrate('V','calVolt')">Set</button>
+</div>
+</div>
+
+<div class="setting-row">
+<div class="setting-left">Meter current (A), motor running</div>
+<div class="setting-right">
+<input type="number" id="calAmp" min="0" max="50" step="0.1" placeholder="5.0">
+<button type="button" class="btn btn-secondary" onclick="calibrate('I','calAmp')">Set</button>
+</div>
+</div>
+
+</div>
+
 <div class="actions">
 <button class="btn btn-danger"    onclick="factoryReset()">Factory Reset</button>
 <button id="applyBtn" class="btn btn-primary" onclick="apply()">Apply Settings</button>
@@ -465,6 +486,22 @@ function apply(){
       status.innerText = "Failed to save settings";
     })
     .finally(() => btn.disabled = false);
+}
+
+/* PRT-06: scale the device's voltage / current to a meter reading */
+function calibrate(type, id){
+  const v = document.getElementById(id).value;
+  const status = document.getElementById("status");
+  if (v === "") { status.className = "status error"; status.innerText = "Enter the meter reading"; return; }
+  status.className = "status";
+  status.innerText = "Calibrating...";
+  fetch("/calibrate?type=" + type + "&value=" + encodeURIComponent(v))
+    .then(r => r.text())
+    .then(t => {
+      status.className = t.startsWith("Calibrated") ? "status success" : "status error";
+      status.innerText = t;
+    })
+    .catch(() => { status.className = "status error"; status.innerText = "Calibration failed"; });
 }
 
 function factoryReset(){
