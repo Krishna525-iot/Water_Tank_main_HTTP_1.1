@@ -126,6 +126,7 @@ struct CountdownCache {
   bool active = false;
   int duration = 600;      /* seconds (page shows minutes) */
   int remaining = 0;       /* seconds */
+  bool paused = false;     /* device paused it on a fault (CD-05/06) */
 } g_countdown;
 
 
@@ -277,6 +278,7 @@ static void loadFromEEPROM() {
   g_countdown.duration = d.countdownDuration;
   g_countdown.active = false;
   g_countdown.remaining = 0;
+  g_countdown.paused = false;
 
   /* Twist config — never restore active state */
   g_twist.onDuration = d.twistOnDuration;
@@ -492,13 +494,15 @@ static void parseDeviceTwist(const String &body) {
   g_twist.active  = (f[6].toInt() != 0);
 }
 
-/* @COUNTDOWN_DATA:<defaultMin>:<remainingSec>:<active># */
+/* @COUNTDOWN_DATA:<defaultMin>:<remainingSec>:<active>[:<paused>]# */
 static void parseDeviceCountdown(const String &body) {
-  String f[3];
-  if (splitColon(body, f, 3) < 3) return;
+  String f[4];
+  int n = splitColon(body, f, 4);
+  if (n < 3) return;
   if (f[0].toInt() > 0) g_countdown.duration = f[0].toInt() * 60;
   g_countdown.remaining = f[1].toInt();
   g_countdown.active    = (f[2].toInt() != 0);
+  g_countdown.paused    = (n >= 4) && (f[3].toInt() != 0);
 }
 
 /* @LIVE:<volts>:<amps>:<gw>:<dryWater>:<hh>:<mm>:<ss># */
@@ -524,6 +528,7 @@ static bool handleDevicePacket(const String &pkt) {
   if (pkt == "@COUNTDOWN_OFF#" || pkt.startsWith("@COUNTDOWN:DONE")) {
     g_countdown.active = false;
     g_countdown.remaining = 0;
+    g_countdown.paused = false;
     return true;
   }
   return false;
@@ -619,7 +624,8 @@ static String buildCountdownJson(bool fromDevice) {
   j += "\"fromDevice\":" + String(fromDevice ? 1 : 0) + ",";
   j += "\"active\":" + String(g_countdown.active ? 1 : 0) + ",";
   j += "\"duration\":" + String(g_countdown.duration) + ",";
-  j += "\"remaining\":" + String(g_countdown.remaining) + "}";
+  j += "\"remaining\":" + String(g_countdown.remaining) + ",";
+  j += "\"paused\":" + String(g_countdown.paused ? 1 : 0) + "}";
   return j;
 }
 
@@ -804,6 +810,7 @@ void start_webserver() {
 
     g_countdown.duration = mins * 60;
     g_countdown.remaining = mins * 60;
+    g_countdown.paused = false;
     g_countdown.active = true;
 
     sendPacket("@COUNTDOWN:ON:" + String(mins) + "#");
@@ -816,6 +823,7 @@ void start_webserver() {
   server.on("/countdown_stop", HTTP_GET, []() {
     g_countdown.active = false;
     g_countdown.remaining = 0;
+    g_countdown.paused = false;
 
     sendPacket("@COUNTDOWN:OFF#");
     if (g_liveMode == "COUNTDOWN") g_liveMode = "STANDBY";

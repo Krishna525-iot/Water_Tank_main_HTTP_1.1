@@ -218,7 +218,7 @@ input:checked + .slider:before {
 <div class="setting-row">
 <div class="setting-left">Retry Count</div>
 <div class="setting-right">
-<input type="number" id="retryCount" min="1" max="20">
+<input type="number" id="retryCount" min="1" max="15">
 <label class="switch">
 <input type="checkbox" id="retryCount_en" onchange="toggleInput('retryCount','retryCount_en')">
 <span class="slider"></span>

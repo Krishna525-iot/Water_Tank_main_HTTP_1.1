@@ -63,6 +63,38 @@ const char* countdownModeHtml = R"rawliteral(
   let remaining = 0;
   let ticker    = null;
   let isActive  = false;
+  let paused    = false;   /* device paused it on a fault: time frozen */
+
+  /* The device owns the time: re-read it every 5 s so the page matches
+     the LCD (a fault pauses the countdown on the device). */
+  async function syncFromDevice() {
+    try {
+      const r = await fetch('/get_countdown');
+      const d = await r.json();
+      if (!d.fromDevice) return;
+      if (d.active == 1) {
+        remaining = d.remaining;
+        paused    = (d.paused == 1);
+        if (!isActive) setActiveUI();
+        if (!ticker) ticker = setInterval(tick, 1000);
+        showTime();
+      } else if (isActive) {
+        clearInterval(ticker); ticker = null;
+        paused = false;
+        setIdleUI();
+        document.getElementById('countdownDisplay').textContent = 'Countdown finished.';
+      }
+    } catch {}
+  }
+  setInterval(syncFromDevice, 5000);
+
+  function showTime() {
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    const t = `${m}:${s.toString().padStart(2, '0')}`;
+    document.getElementById('countdownDisplay').textContent =
+      paused ? `Paused (fault) - ${t} left` : `${t} remaining`;
+  }
 
   /* ── on load: read the device; show a running countdown, otherwise
         the saved duration — never auto-start ── */
@@ -76,6 +108,7 @@ const char* countdownModeHtml = R"rawliteral(
 
       if (d.active == 1 && d.remaining > 0) {
         remaining = d.remaining;
+        paused    = (d.paused == 1);
         setActiveUI();
         clearInterval(ticker);
         tick();
@@ -93,6 +126,7 @@ const char* countdownModeHtml = R"rawliteral(
   });
 
   function tick() {
+    if (paused) { showTime(); return; }   /* frozen until the device resumes */
     if (remaining <= 0) {
       clearInterval(ticker);
       ticker   = null;
@@ -101,10 +135,7 @@ const char* countdownModeHtml = R"rawliteral(
       document.getElementById('countdownDisplay').textContent = 'Countdown finished.';
       return;
     }
-    const m = Math.floor(remaining / 60);
-    const s = remaining % 60;
-    document.getElementById('countdownDisplay').textContent =
-      `${m}:${s.toString().padStart(2, '0')} remaining`;
+    showTime();
     remaining--;
   }
 
@@ -121,6 +152,7 @@ const char* countdownModeHtml = R"rawliteral(
       document.getElementById('message').textContent = msg;
 
       remaining = mins * 60;
+      paused    = false;
       setActiveUI();
       clearInterval(ticker);
       tick();
@@ -133,6 +165,7 @@ const char* countdownModeHtml = R"rawliteral(
   async function stopCountdown() {
     try {
       clearInterval(ticker); ticker = null;
+      paused = false;
       const r   = await fetch('/countdown_stop');
       const msg = await r.text();
       document.getElementById('message').textContent = msg;

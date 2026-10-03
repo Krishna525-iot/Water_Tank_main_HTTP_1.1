@@ -13,7 +13,7 @@ void wifi_init() {
   uint8_t mac[6];
   WiFi.softAPmacAddress(mac);
   snprintf(AP_SSID, sizeof(AP_SSID), "helonix_%02X%02X%02X",
-           mac[3], mac[4], mac[5]);
+           mac[3], mac[4], mac[5]);    
 
   Serial.println("\n[WiFi] Setting up Access Point...");
   Serial.printf("[WiFi] SSID: %s\n", AP_SSID);
