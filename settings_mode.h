@@ -161,7 +161,7 @@ input:checked + .slider:before {
 }
 
 .status.success{color:var(--success)}
-.status.error{color:var(--danger)}
+.status.error{color:var(--danger);font-weight:700;border:2px solid var(--danger);background:#fdecea}
 
 .disabled-input{
   opacity:0.5;
@@ -399,8 +399,11 @@ function loadSettings(msg){
       if (id.endsWith("_en")) toggleInput(id.replace("_en", ""), id);
     });
 
+    /* A failed / unconfirmed save stays red even though the page could
+       read the values back (client report 12-10, item 16 / B-07) */
+    const failed = msg && /not confirm|fail|not accepted|error/i.test(msg);
     if (data.fromDevice == 1) {
-      status.className = "status success";
+      status.className = failed ? "status error" : "status success";
       status.innerText = msg || "Showing current device settings";
     } else {
       status.className = "status error";
