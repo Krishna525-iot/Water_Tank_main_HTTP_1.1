@@ -840,15 +840,17 @@ void start_webserver() {
   server.on("/motor_toggle", HTTP_GET, []() {
     setCORSHeaders();
 
-    if (g_motorStatus == "ON") {
-      sendPacket("@MANUAL:OFF#");
-      g_motorStatus = "OFF";
-    } else {
-      sendPacket("@MANUAL:ON#");
-      g_motorStatus = "ON";
-    }
+    /* Client report 12-10, item 12: the button must never show OFF while
+     * the motor runs. One tap sets the motor directly (the device goes to
+     * Manual from any mode), and the page shows only what the device
+     * reports back - never a guessed state. */
+    bool wantOn = (g_motorStatus != "ON");
+    bool ok = requestFromDevice(wantOn ? "@MANUAL:MOTOR_ON#" : "@MANUAL:MOTOR_OFF#",
+                                "@STATUS:", 1);
+    if (!ok) ok = requestFromDevice("@STATUS#", "@STATUS:", 1);
 
-    String j = "{\"motor\":" + jsonStr(g_motorStatus) + "}";
+    String j = "{\"motor\":" + jsonStr(g_motorStatus) + ",\"mode\":" + jsonStr(g_liveMode) +
+               ",\"fromDevice\":" + String(ok ? 1 : 0) + "}";
     server.send(200, "application/json", j);
   });
 
