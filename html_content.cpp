@@ -153,6 +153,7 @@ body {
   <div class="live-cell"><div class="k">Time</div><div class="v" id="lvTime">--</div></div>
   <div class="live-cell"><div class="k">G.W</div><div class="v" id="lvGw">--</div></div>
   <div class="live-cell"><div class="k">Dry sensor</div><div class="v" id="lvDry">--</div></div>
+  <div class="live-cell"><div class="k">Run time</div><div class="v" id="lvRun">--</div></div>
 </div>
 
 <h2>Controls</h2>
@@ -245,6 +246,14 @@ async function fetchLive() {
     document.getElementById("lvVolt").innerHTML = d.volts + " V";
     document.getElementById("lvAmp").innerHTML  = d.amps + " A";
     document.getElementById("lvTime").innerHTML = d.time;
+    /* N-03: how long the motor has run, "--" while it is off */
+    if (d.run >= 0) {
+      const p = n => String(n).padStart(2, "0");
+      const h = Math.floor(d.run / 3600), m = Math.floor(d.run / 60) % 60, s = d.run % 60;
+      document.getElementById("lvRun").innerHTML = (h ? h + ":" + p(m) : p(m)) + ":" + p(s);
+    } else {
+      document.getElementById("lvRun").innerHTML = "--";
+    }
     document.getElementById("lvGw").innerHTML   = d.gw ? "YES" : "NO";
     document.getElementById("lvDry").innerHTML  = d.dryWater ? "WATER" : "DRY";
   } catch (e) {}

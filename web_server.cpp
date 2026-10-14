@@ -76,6 +76,7 @@ struct LiveCache {
   int gw = 0;
   int dryWater = 0;
   String time = "--:--:--";
+  long runS = -1;           /* motor run seconds, -1 = motor off (N-03) */
   unsigned long at = 0;     /* millis() of the last packet, 0 = none yet */
 } g_live;
 
@@ -505,10 +506,13 @@ static void parseDeviceCountdown(const String &body) {
   g_countdown.paused    = (n >= 4) && (f[3].toInt() != 0);
 }
 
-/* @LIVE:<volts>:<amps>:<gw>:<dryWater>:<hh>:<mm>:<ss># */
+/* @LIVE:<volts>:<amps>:<gw>:<dryWater>:<hh>:<mm>:<ss>:<run s># (run s
+   is -1 while the motor is off; older firmware does not send it) */
 static void parseLive(const String &body) {
-  String f[7];
-  if (splitColon(body, f, 7) < 7) return;
+  String f[8];
+  int n = splitColon(body, f, 8);
+  if (n < 7) return;
+  g_live.runS     = (n >= 8) ? f[7].toInt() : -1;
   g_live.volts    = f[0].toInt();
   g_live.amps     = f[1];
   g_live.gw       = f[2].toInt();
@@ -686,7 +690,8 @@ void start_webserver() {
     j += "\"amps\":" + jsonStr(g_live.amps) + ",";
     j += "\"gw\":" + String(g_live.gw) + ",";
     j += "\"dryWater\":" + String(g_live.dryWater) + ",";
-    j += "\"time\":" + jsonStr(g_live.time) + "}";
+    j += "\"time\":" + jsonStr(g_live.time) + ",";
+    j += "\"run\":" + String(fresh ? g_live.runS : -1L) + "}";
     server.send(200, "application/json", j);
   });
 
@@ -939,6 +944,32 @@ void start_webserver() {
     bool ok = requestFromDevice("", "@CAL_OK#", 1);
     server.send(200, "text/plain", ok ? "Calibrated - device confirmed"
                                       : "Not accepted (motor must run for current; 50-400 V for voltage)");
+  });
+
+  /* Set the device clock from the phone: @TIME:SET:HH:MM:SS:DD:MM:YYYY:DOW#
+     (DOW 1 = Sunday). The device answers @TIME_SET_OK# then @TIME_DATA:..#,
+     or @TIME_ERR#. The RTC has no backup cell, so this is needed after
+     every power cut. */
+  server.on("/set_time", HTTP_GET, []() {
+    setCORSHeaders();
+    const char *keys[7] = {"h", "m", "s", "d", "mo", "y", "dow"};
+    const int   lo[7]   = {0, 0, 0, 1, 1, 2024, 1};
+    const int   hi[7]   = {23, 59, 59, 31, 12, 2099, 7};
+    int v[7];
+    for (int i = 0; i < 7; i++) {
+      String a = server.arg(keys[i]);
+      v[i] = a.toInt();
+      if (a.length() == 0 || v[i] < lo[i] || v[i] > hi[i]) {
+        server.send(400, "text/plain", "Bad time");
+        return;
+      }
+    }
+    char cmd[48];
+    snprintf(cmd, sizeof(cmd), "@TIME:SET:%02d:%02d:%02d:%02d:%02d:%04d:%d#",
+             v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
+    bool ok = requestFromDevice(cmd, "@TIME_DATA:", 1);
+    server.send(200, "text/plain", ok ? "Device clock set"
+                                      : "Sent - device did not confirm");
   });
 
   server.on("/factory_reset", HTTP_GET, []() {

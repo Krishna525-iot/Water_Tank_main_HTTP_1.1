@@ -349,6 +349,18 @@ input:checked + .slider:before {
 
 </div>
 
+<div class="section">
+<div class="section-title">Device Clock</div>
+
+<div class="setting-row">
+<div class="setting-left">Device time: <b id="devTime">--:--:--</b></div>
+<div class="setting-right">
+<button type="button" class="btn btn-secondary" onclick="syncTime()">Set from phone</button>
+</div>
+</div>
+
+</div>
+
 <div class="actions">
 <button class="btn btn-danger"    onclick="factoryReset()">Factory Reset</button>
 <button id="applyBtn" class="btn btn-primary" onclick="apply()">Apply Settings</button>
@@ -519,6 +531,34 @@ function factoryReset(){
       status.className = "status error";
       status.innerText = "Factory reset failed";
     });
+}
+
+/* Device clock: shown from /live; "--:--:--" means the clock was lost
+   (power cut, no RTC backup cell) and timers will not run until set */
+function refreshDevTime(){
+  fetch("/live").then(r => r.json()).then(d => {
+    document.getElementById("devTime").innerText = d.fresh ? d.time : "--:--:--";
+  }).catch(() => {});
+}
+setInterval(refreshDevTime, 2000);
+refreshDevTime();
+
+function syncTime(){
+  const n = new Date();
+  const q = "h=" + n.getHours() + "&m=" + n.getMinutes() + "&s=" + n.getSeconds() +
+            "&d=" + n.getDate() + "&mo=" + (n.getMonth() + 1) + "&y=" + n.getFullYear() +
+            "&dow=" + (n.getDay() + 1);
+  const status = document.getElementById("status");
+  status.className = "status";
+  status.innerText = "Setting clock...";
+  fetch("/set_time?" + q)
+    .then(r => r.text())
+    .then(t => {
+      status.className = t === "Device clock set" ? "status success" : "status error";
+      status.innerText = t;
+      refreshDevTime();
+    })
+    .catch(() => { status.className = "status error"; status.innerText = "Setting clock failed"; });
 }
 
 </script>
