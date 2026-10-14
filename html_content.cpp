@@ -256,7 +256,28 @@ async function fetchLive() {
     }
     document.getElementById("lvGw").innerHTML   = d.gw ? "YES" : "NO";
     document.getElementById("lvDry").innerHTML  = d.dryWater ? "WATER" : "DRY";
+    if (d.fresh) autoClockSync(d.time);
   } catch (e) {}
+}
+
+/* N-06: set the device clock from the phone when it was lost (power cut,
+   RTC cell) or is more than 60 s off - checked on every live update, so
+   also a power cut while the page is open; at most one try per 10 s */
+let lastClockSync = 0;
+function autoClockSync(devTime) {
+  if (Date.now() - lastClockSync < 10000) return;
+  const n = new Date();
+  const t = devTime.split(":").map(Number);
+  if (t.length === 3 && !t.some(isNaN)) {
+    let diff = Math.abs(t[0] * 3600 + t[1] * 60 + t[2] -
+                        (n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds()));
+    diff = Math.min(diff, 86400 - diff);   /* across midnight */
+    if (diff <= 60) return;
+  }
+  lastClockSync = Date.now();
+  fetch("/set_time?h=" + n.getHours() + "&m=" + n.getMinutes() + "&s=" + n.getSeconds() +
+        "&d=" + n.getDate() + "&mo=" + (n.getMonth() + 1) + "&y=" + n.getFullYear() +
+        "&dow=" + (n.getDay() + 1)).catch(() => {});
 }
 
 /* Client DEC-16: motor / level / mode every 3 s, other data every 1 s */
