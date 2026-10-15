@@ -125,6 +125,9 @@ body {
 .live-cell .k { font-size: 12px; color: #546e7a; }
 .live-cell .v { font-size: 17px; font-weight: 700; }
 .live-stale { opacity: 0.45; }
+.live-fault { grid-column: 1 / -1; }
+.live-fault.on { border: 2px solid #c62828; background: #fdecea; }
+.live-fault.on .v { color: #c62828; }
 
 @media (max-width: 520px) {
   .button-grid { grid-template-columns: repeat(2, 1fr); }
@@ -154,6 +157,7 @@ body {
   <div class="live-cell"><div class="k">G.W</div><div class="v" id="lvGw">--</div></div>
   <div class="live-cell"><div class="k">Dry sensor</div><div class="v" id="lvDry">--</div></div>
   <div class="live-cell"><div class="k">Run time</div><div class="v" id="lvRun">--</div></div>
+  <div class="live-cell live-fault" id="lvFaultBox"><div class="k">Fault</div><div class="v" id="lvFault">--</div></div>
 </div>
 
 <h2>Controls</h2>
@@ -256,6 +260,10 @@ async function fetchLive() {
     }
     document.getElementById("lvGw").innerHTML   = d.gw ? "YES" : "NO";
     document.getElementById("lvDry").innerHTML  = d.dryWater ? "WATER" : "DRY";
+    /* N-02: the device's error / stop reason, same text as on the LCD */
+    const f = d.fresh ? (d.fault || "") : "";
+    document.getElementById("lvFault").innerHTML = d.fresh ? (f || "None") : "--";
+    document.getElementById("lvFaultBox").className = "live-cell live-fault" + (f ? " on" : "");
     if (d.fresh) autoClockSync(d.time);
   } catch (e) {}
 }

@@ -77,6 +77,7 @@ struct LiveCache {
   int dryWater = 0;
   String time = "--:--:--";
   long runS = -1;           /* motor run seconds, -1 = motor off (N-03) */
+  String fault = "";        /* device stop reason, "" = none (N-02) */
   unsigned long at = 0;     /* millis() of the last packet, 0 = none yet */
 } g_live;
 
@@ -506,13 +507,15 @@ static void parseDeviceCountdown(const String &body) {
   g_countdown.paused    = (n >= 4) && (f[3].toInt() != 0);
 }
 
-/* @LIVE:<volts>:<amps>:<gw>:<dryWater>:<hh>:<mm>:<ss>:<run s># (run s
-   is -1 while the motor is off; older firmware does not send it) */
+/* @LIVE:<volts>:<amps>:<gw>:<dryWater>:<hh>:<mm>:<ss>:<run s>:<fault>#
+   (run s is -1 while the motor is off; fault is the device's stop reason
+   or CLOCK LOST, empty when none; older firmware sends neither) */
 static void parseLive(const String &body) {
-  String f[8];
-  int n = splitColon(body, f, 8);
+  String f[9];
+  int n = splitColon(body, f, 9);
   if (n < 7) return;
   g_live.runS     = (n >= 8) ? f[7].toInt() : -1;
+  g_live.fault    = (n >= 9) ? f[8] : "";
   g_live.volts    = f[0].toInt();
   g_live.amps     = f[1];
   g_live.gw       = f[2].toInt();
@@ -691,7 +694,8 @@ void start_webserver() {
     j += "\"gw\":" + String(g_live.gw) + ",";
     j += "\"dryWater\":" + String(g_live.dryWater) + ",";
     j += "\"time\":" + jsonStr(g_live.time) + ",";
-    j += "\"run\":" + String(fresh ? g_live.runS : -1L) + "}";
+    j += "\"run\":" + String(fresh ? g_live.runS : -1L) + ",";
+    j += "\"fault\":" + jsonStr(fresh ? g_live.fault : String("")) + "}";
     server.send(200, "application/json", j);
   });
 
