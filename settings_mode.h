@@ -307,7 +307,7 @@ input:checked + .slider:before {
 </div>
 
 <div class="setting-row">
-<div class="setting-left">Tank full (30 s)</div>
+<div class="setting-left">Tank full (15 s)</div>
 <div class="setting-right">
 <label class="switch">
 <input type="checkbox" id="buzzerFull">
