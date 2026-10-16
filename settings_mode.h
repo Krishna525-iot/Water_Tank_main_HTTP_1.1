@@ -200,14 +200,14 @@ input:checked + .slider:before {
 <div class="setting-row">
 <div class="setting-left">Testing Gap (minutes)</div>
 <div class="setting-right">
-<input type="number" id="testingGap" min="1" max="180">
+<input type="number" id="testingGap" min="1" max="300">
 </div>
 </div>
 
 <div class="setting-row">
 <div class="setting-left">Maximum Run Time (minutes)</div>
 <div class="setting-right">
-<input type="number" id="maxRun" min="1" max="1440">
+<input type="number" id="maxRun" min="1" max="300">
 <label class="switch">
 <input type="checkbox" id="maxRun_en" onchange="toggleInput('maxRun','maxRun_en')">
 <span class="slider"></span>
@@ -474,6 +474,22 @@ function apply(){
 
   const btn    = document.getElementById("applyBtn");
   const status = document.getElementById("status");
+
+  /* Number fields with a range (e.g. Max Run / Testing Gap 1-300 min):
+     typing on a phone ignores min/max, so check before sending */
+  for (const id of Object.keys(keyMap)) {
+    const el = document.getElementById(id);
+    if (!el || el.min === "" || el.max === "" || el.disabled) continue;
+    const v = Number(el.value);
+    if (el.value === "" || isNaN(v) || v < Number(el.min) || v > Number(el.max)) {
+      const row = el.closest(".setting-row");
+      const name = row ? row.querySelector(".setting-left").innerText : id;
+      status.className = "status error";
+      status.innerText = name + ": enter " + el.min + " to " + el.max;
+      el.focus();
+      return;
+    }
+  }
 
   let p = [];
 
