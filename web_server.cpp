@@ -107,6 +107,7 @@ struct SettingsCache {
   int buzzerPump = 0;
   int buzzerFull = 0;
   int buzzerEmpty = 0;
+  int levelSource = 1;      /* 0 = wired probes, 1 = wireless transmitter (N-08) */
 } g_settings;
 
 
@@ -461,6 +462,7 @@ static void parseDeviceSettings(const String &body) {
     else if (key == "BF") g_settings.buzzerFull  = v ? 1 : 0;
     else if (key == "BE") g_settings.buzzerEmpty = v ? 1 : 0;
     else if (key == "CD") { if (v > 0) g_countdown.duration = v * 60; }
+    else if (key == "SRC") g_settings.levelSource = v ? 1 : 0;
   }
 }
 
@@ -607,7 +609,8 @@ static String buildSettingsJson(bool fromDevice) {
   j += "\"underLoad_en\":" + String(g_settings.underLoadEn) + ",";
   j += "\"buzzerPump\":" + String(g_settings.buzzerPump) + ",";
   j += "\"buzzerFull\":" + String(g_settings.buzzerFull) + ",";
-  j += "\"buzzerEmpty\":" + String(g_settings.buzzerEmpty) + "}";
+  j += "\"buzzerEmpty\":" + String(g_settings.buzzerEmpty) + ",";
+  j += "\"levelSource\":" + String(g_settings.levelSource) + "}";
   return j;
 }
 
@@ -659,6 +662,12 @@ static void setCORSHeaders() {
   server.sendHeader("Cache-Control", "no-cache");
 }
 
+/* Pages must not come from the phone's cache: after a firmware update the
+   browser kept showing the old page (16-10). */
+static void noCachePage() {
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+}
+
 
 /* ======================================================
    WEB SERVER
@@ -674,6 +683,7 @@ void start_webserver() {
 
   /* ── Main dashboard ── */
   server.on("/", HTTP_GET, []() {
+    noCachePage();
     server.send(200, "text/html", htmlContent);
   });
 
@@ -753,6 +763,7 @@ void start_webserver() {
 
   /* ── TIMER PAGE ── */
   server.on("/timer", HTTP_GET, []() {
+    noCachePage();
     server.send(200, "text/html", timerModeHtml);
   });
 
@@ -807,6 +818,7 @@ void start_webserver() {
 
   /* ── COUNTDOWN PAGE ── */
   server.on("/countdown", HTTP_GET, []() {
+    noCachePage();
     server.send(200, "text/html", countdownModeHtml);
   });
 
@@ -842,6 +854,7 @@ void start_webserver() {
 
   /* ── TWIST PAGE ── */
   server.on("/twist", HTTP_GET, []() {
+    noCachePage();
     server.send(200, "text/html", twistModeHtml);
   });
 
@@ -898,6 +911,7 @@ void start_webserver() {
 
   /* ── SETTINGS PAGE ── */
   server.on("/settings", HTTP_GET, []() {
+    noCachePage();
     server.send(200, "text/html", settingsModeHtml);
   });
 
@@ -948,6 +962,24 @@ void start_webserver() {
     bool ok = requestFromDevice("", "@CAL_OK#", 1);
     server.send(200, "text/plain", ok ? "Calibrated - device confirmed"
                                       : "Not accepted (motor must run for current; 50-400 V for voltage)");
+  });
+
+  /* Level source (N-08): mode=wired (Main board probes) or wireless
+     (transmitter). The device answers @SOURCE_OK# then its settings with
+     SRC=0/1; the page shows what the device reports. */
+  server.on("/source", HTTP_GET, []() {
+    setCORSHeaders();
+    String mode = server.arg("mode");
+    if (mode != "wired" && mode != "wireless") {
+      server.send(400, "text/plain", "Bad request");
+      return;
+    }
+    int want = (mode == "wireless") ? 1 : 0;
+    sendPacket(want ? "@SOURCE:WIRELESS#" : "@SOURCE:WIRED#");
+    bool ok = requestFromDevice("", "@SETTINGS_DATA:", 1) && g_settings.levelSource == want;
+    server.send(200, "text/plain", ok ? (want ? "Level from transmitter - device confirmed"
+                                              : "Level from device probes - device confirmed")
+                                      : "Not confirmed by the device");
   });
 
   /* Set the device clock from the phone: @TIME:SET:HH:MM:SS:DD:MM:YYYY:DOW#

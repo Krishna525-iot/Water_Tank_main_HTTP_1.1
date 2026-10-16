@@ -329,6 +329,22 @@ input:checked + .slider:before {
 </div>
 
 <div class="section">
+<div class="section-title">Level Sensor</div>
+
+<div class="setting-row">
+<div class="setting-left">Read tank level from</div>
+<div class="setting-right">
+<select id="levelSource">
+<option value="1">Transmitter (wireless)</option>
+<option value="0">Device probes (wired)</option>
+</select>
+<button type="button" class="btn btn-secondary" onclick="setSource()">Set</button>
+</div>
+</div>
+
+</div>
+
+<div class="section">
 <div class="section-title">Calibration (against a meter)</div>
 
 <div class="setting-row">
@@ -388,8 +404,21 @@ const FIELDS = [
   "overLoad",   "overLoad_en",
   "underLoad",  "underLoad_en",
   "powerRestore",
-  "buzzerPump", "buzzerFull", "buzzerEmpty"
+  "buzzerPump", "buzzerFull", "buzzerEmpty",
+  "levelSource"
 ];
+
+/* N-08: where the device reads the tank level from */
+function setSource(){
+  const v = document.getElementById("levelSource").value;
+  const status = document.getElementById("status");
+  status.className = "status";
+  status.innerText = "Setting level sensor...";
+  fetch("/source?mode=" + (v == "1" ? "wireless" : "wired"))
+    .then(r => r.text())
+    .then(t => loadSettings(t))     /* shows what the device now uses */
+    .catch(() => { status.className = "status error"; status.innerText = "Setting level sensor failed"; });
+}
 
 /* Values come from the device itself (the ESP asks the STM32 first) */
 function loadSettings(msg){

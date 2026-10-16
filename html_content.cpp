@@ -262,7 +262,9 @@ async function fetchLive() {
     document.getElementById("lvDry").innerHTML  = d.dryWater ? "WATER" : "DRY";
     /* N-02: the device's error / stop reason, same text as on the LCD */
     const f = d.fresh ? (d.fault || "") : "";
-    document.getElementById("lvFault").innerHTML = d.fresh ? (f || "None") : "--";
+    /* the device sends every active fault, "A,B" - one per line */
+    document.getElementById("lvFault").innerHTML =
+      d.fresh ? (f ? f.split(",").join("<br>") : "None") : "--";
     document.getElementById("lvFaultBox").className = "live-cell live-fault" + (f ? " on" : "");
     if (d.fresh) autoClockSync(d.time);
   } catch (e) {}
